@@ -18,4 +18,4 @@ pip-log.txt
 .vscode/
 
 # Dependencies
-*.egg-info/
+*.egg-info/.DS_Store
