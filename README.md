@@ -1,56 +1,62 @@
-# 股票数据处理与算法实现项目
+### 股票数据管道项目  
 
-本项目旨在完成一个包含算法题解和软件工程实践的综合任务。
-
-## 项目结构
-.
-├── .gitignore # Git 忽略文件配置
-├── README.md # 项目说明
-├── problem_1_and_2.md # 算法题 1 和 2 的详细解答
-└── src/ # Python 代码 (题目 4)
-├── init.py
-├── data_fetcher.py # 使用 akshare 获取数据的模块
-├── database_manager.py # SQLite 数据库管理模块
-├── data_validator.py # 数据校验模块
-└── main.py # 主程序入口，协调数据流
+本项目实现了一套 Python 数据管道，用于获取 A 股每日行情数据、校验数据质量，并将其存储到本地 SQLite 数据库。  
 
 
-## 分支说明
+## 核心功能  
+- **数据来源**：依托 `akshare` 库拉取 A 股市场数据。  
+- **数据库存储**：采用 SQLite 数据库本地化存储数据。  
+- **增量更新**：重复运行时，仅抓取上次更新后的新增数据。  
+- **容错机制**：若数据库文件丢失或损坏，支持全量重刷数据恢复完整内容。  
+- **数据校验**：入库前执行基础校验（如格式、完整性），保障数据质量。  
 
-*   `main`: 主分支，包含项目的基本结构和文档。
-*   `branch-1`: (概念性) 包含了对一个假设性后端项目进行结构优化的思考与设计。详情请参考 `problem_3_solution.md` (您需要创建这个文件来存放题目3的解答)。
-*   `branch-2`: 包含了题目 4 的完整 Python 实现，一个用于获取、存储和验证A股行情数据的数据管道。
 
-## 如何运行 (Branch 2)
+## 项目结构  
+- `src/`：核心代码目录  
+  - `main.py`：数据管道的启动入口。  
+  - `data_fetcher.py`：封装 `akshare` 的数据获取逻辑。  
+  - `database_manager.py`：处理数据库的建表、增删查改等操作。  
+  - `data_validator.py`：实现数据校验规则（如字段合法性检查）。  
+- `requirements.txt`：项目依赖的 Python 包清单（需安装）。  
+- `stock_data.db`：SQLite 数据库文件（首次运行自动生成）。  
 
-1.  **克隆仓库并切换分支**
-    ```bash
-    git clone <您的 GitHub 仓库 URL>
-    cd stock_data_project
-    git checkout branch-2
-    ```
 
-2.  **安装依赖**
-    ```bash
-    pip install pandas akshare sqlalchemy
-    ```
+## 运行指南  
 
-3.  **运行程序**
+### 1. 配置虚拟环境（推荐）  
+```bash  
+python -m venv venv  
+source venv/bin/activate  # Windows 系统请用 `venv\Scripts\activate`  
+```  
 
-    *   **首次运行或完全刷新数据：**
-        该命令会获取所有A股过去一年的日K数据并存入本地的 `stock_data.sqlite3` 数据库。
-        ```bash
-        python src/main.py --mode full
-        ```
 
-    *   **每日增量更新：**
-        该命令会检查数据库中每只股票的最新日期，并只获取此后到今天的新数据。
-        ```bash
-        python src/main.py --mode increment
-        ```
+### 2. 安装依赖包  
+```bash  
+pip install -r requirements.txt  
+```  
 
-    *   **数据验证：**
-        该命令会对数据库中的数据进行基础的校验。
-        ```bash
-        python src/main.py --mode validate
-        ```
+
+### 3. 启动数据管道  
+进入 `src` 目录，执行主脚本：  
+
+```bash  
+cd src  
+python main.py  
+```  
+
+- **首次运行**：全量拉取近一年的 A 股数据，耗时较长（因数据量较大）。  
+- **后续运行**：仅同步新增数据，执行速度更快。  
+
+
+### 故障恢复 / 全量同步  
+若 `stock_data.db` 文件丢失，或需要重新全量同步数据，可修改 `src/main.py` 的最后一行：  
+
+将：  
+```python  
+run_pipeline(full_resync=False)  
+```  
+改为：  
+```python  
+run_pipeline(full_resync=True)  
+```  
+重新运行 `main.py` 即可触发全量同步，重建完整数据库。

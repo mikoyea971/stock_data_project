@@ -1,0 +1,4 @@
+akshare
+pandas
+SQLAlchemy
+tqdm # 用于显示进度条

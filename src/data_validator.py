@@ -1,44 +1,36 @@
-# src/data_validator.py
 import pandas as pd
+import logging
 
-class DataValidator:
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
-        self.errors = []
+def validate_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Performs basic validation on the stock data DataFrame.
+    :param df: The input DataFrame.
+    :return: A cleaned DataFrame.
+    """
+    if df.empty:
+        return df
 
-    def run_all_validations(self):
-        """执行所有校验"""
-        self.validate_ohlc()
-        self.validate_positive_values()
-        self.validate_missing_values()
-        
-        if self.errors:
-            print("数据校验发现以下问题:")
-            for error in self.errors:
-                print(f"- {error}")
-        else:
-            print("数据校验通过，未发现明显问题。")
-        return not self.errors
+    # 1. Check for missing values in critical columns
+    initial_rows = len(df)
+    df.dropna(subset=['date', 'code', 'open', 'high', 'low', 'close', 'volume'], inplace=True)
+    if len(df) < initial_rows:
+        logging.warning(f"Dropped {initial_rows - len(df)} rows due to missing values.")
 
-    def validate_ohlc(self):
-        """校验开盘/最高/最低/收盘价的逻辑关系"""
-        invalid_ohlc = self.df[
-            (self.df['最低'] > self.df['开盘']) |
-            (self.df['最低'] > self.df['收盘']) |
-            (self.df['最高'] < self.df['开盘']) |
-            (self.df['最高'] < self.df['收盘'])
-        ]
-        if not invalid_ohlc.empty:
-            self.errors.append(f"发现 {len(invalid_ohlc)} 条 OHLC 逻辑错误的数据。")
+    # 2. Check for logical inconsistencies (high >= low, etc.)
+    # Note: In some rare cases (e.g., stock suspension), open/high/low/close can be equal.
+    invalid_rows = df[(df['high'] < df['low']) | (df['high'] < df['open']) | (df['high'] < df['close']) | \
+                      (df['low'] > df['open']) | (df['low'] > df['close']) | (df['volume'] < 0)]
 
-    def validate_positive_values(self):
-        """校验价格和成交量是否为正"""
-        cols_to_check = ['开盘', '收盘', '最高', '最低', '成交量']
-        for col in cols_to_check:
-            if (self.df[col] < 0).any():
-                self.errors.append(f"列 '{col}' 中发现负值。")
+    if not invalid_rows.empty:
+        logging.warning(f"Found {len(invalid_rows)} rows with inconsistent values. Dropping them.")
+        # Drop invalid rows by index
+        df.drop(invalid_rows.index, inplace=True)
+    
+    # 3. Ensure data types are correct
+    df['open'] = pd.to_numeric(df['open'])
+    df['high'] = pd.to_numeric(df['high'])
+    df['low'] = pd.to_numeric(df['low'])
+    df['close'] = pd.to_numeric(df['close'])
+    df['volume'] = pd.to_numeric(df['volume']).astype('int64')
 
-    def validate_missing_values(self):
-        """检查是否存在空值"""
-        if self.df.isnull().values.any():
-            self.errors.append("数据中包含空值 (NaN)。")
+    return df

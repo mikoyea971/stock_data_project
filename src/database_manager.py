@@ -1,102 +1,87 @@
-# src/database_manager.py
 import pandas as pd
-from sqlalchemy import create_engine, text, inspect, MetaData, Table, Column, String, Float, Date
+from sqlalchemy import create_engine, text, inspect
+import logging
 
 class DatabaseManager:
-    def __init__(self, db_path='stock_data.sqlite3'):
-        self.db_uri = f'sqlite:///{db_path}'
-        self.engine = create_engine(self.db_uri)
-        self.metadata = MetaData()
-        self._define_table()
+    """Handles all interactions with the SQL database."""
 
-    def _define_table(self):
-        self.stock_table = Table(
-            'stock_daily', self.metadata,
-            Column('代码', String, primary_key=True),
-            Column('日期', Date, primary_key=True),
-            Column('开盘', Float),
-            Column('收盘', Float),
-            Column('最高', Float),
-            Column('最低', Float),
-            Column('成交量', Float),
-            Column('成交额', Float),
-            Column('振幅', Float),
-            Column('涨跌幅', Float),
-            Column('涨跌额', Float),
-            Column('换手率', Float),
-        )
+    def __init__(self, db_path: str = "stock_data.db"):
+        """
+        Initializes the database connection.
+        :param db_path: Path to the SQLite database file.
+        """
+        self.db_path = db_path
+        self.engine = create_engine(f'sqlite:///{db_path}')
+        self.table_name = "daily_prices"
+        self._create_table()
 
-    def create_table_if_not_exists(self):
-        """创建数据表（如果不存在）"""
-        inspector = inspect(self.engine)
-        if not inspector.has_table(self.stock_table.name):
-            print(f"创建数据表: {self.stock_table.name}")
-            self.metadata.create_all(self.engine)
-        else:
-            print(f"数据表 '{self.stock_table.name}' 已存在。")
+    def _create_table(self):
+        """Creates the daily_prices table if it does not exist."""
+        try:
+            with self.engine.connect() as connection:
+                connection.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                    date DATE NOT NULL,
+                    code VARCHAR(10) NOT NULL,
+                    open FLOAT,
+                    high FLOAT,
+                    low FLOAT,
+                    close FLOAT,
+                    volume BIGINT,
+                    PRIMARY KEY (date, code)
+                );
+                """))
+            logging.info(f"Table '{self.table_name}' is ready.")
+        except Exception as e:
+            logging.error(f"Error creating table: {e}")
+            raise
 
     def save_data(self, df: pd.DataFrame):
         """
-        将 DataFrame 数据保存到数据库。
-        使用 'replace' 策略，如果主键（代码, 日期）已存在，则替换旧数据。
+        Saves a DataFrame to the database, appending new data.
+        Handles potential conflicts with existing primary keys.
+        :param df: DataFrame with stock data.
         """
         if df.empty:
             return
-        
+
         try:
-            # 确保 '日期' 列是 datetime 对象
-            df['日期'] = pd.to_datetime(df['日期'])
-            with self.engine.connect() as connection:
-                df.to_sql(
-                    name=self.stock_table.name,
-                    con=connection,
-                    if_exists='append',
-                    index=False,
-                    method=self._upsert_method()
-                )
-            print(f"成功保存 {len(df)} 条数据。")
+            # 'append' will add new rows. 'if_exists' is for the table itself.
+            # Using a temporary table and INSERT OR IGNORE for better conflict handling
+            # However, for simplicity with pandas, we'll rely on primary key constraints
+            # and catch the integrity error, which is slower but simpler to implement.
+            # A more performant way is to filter out existing keys before inserting.
+            df.to_sql(self.table_name, self.engine, if_exists='append', index=False)
+            logging.info(f"Saved {len(df)} rows to the database.")
         except Exception as e:
-            print(f"保存数据时出错: {e}")
+            # This will catch IntegrityError for duplicates, but also other errors.
+            logging.warning(f"Could not save all rows, likely due to duplicates or other DB error: {e}")
 
-    def get_latest_date_for_stock(self, stock_code: str):
-        """获取特定股票在数据库中的最新日期"""
-        query = text(f"""
-            SELECT MAX(日期) FROM {self.stock_table.name}
-            WHERE "代码" = :code
-        """)
-        with self.engine.connect() as connection:
-            result = connection.execute(query, {'code': stock_code}).scalar_one_or_none()
-        return pd.to_datetime(result) if result else None
-    
-    def get_all_data(self):
-        """获取数据库中的所有数据"""
-        return pd.read_sql(f"SELECT * FROM {self.stock_table.name}", self.engine)
+    def get_latest_date(self, stock_code: str) -> str | None:
+        """
+        Gets the latest date for a given stock code from the database.
+        :param stock_code: The stock code to check.
+        :return: The latest date as a 'YYYY-MM-DD' string, or None if no data exists.
+        """
+        try:
+            with self.engine.connect() as connection:
+                result = connection.execute(text(
+                    f"SELECT MAX(date) FROM {self.table_name} WHERE code = :code"
+                ), {"code": stock_code}).scalar_one_or_none()
+            return result
+        except Exception as e:
+            logging.error(f"Error getting latest date for {stock_code}: {e}")
+            return None
 
-    @staticmethod
-    def _upsert_method():
-        """返回一个适用于 to_sql 的方法，实现 'upsert'（更新或插入）逻辑"""
-        def method(table, conn, keys, data_iter):
-            # 对于 SQLite，INSERT OR REPLACE 提供了 upsert 功能
-            # 对于 PostgreSQL, 可以使用 ON CONFLICT DO UPDATE
-            from sqlalchemy.dialects.sqlite import insert
-            
-            for data in data_iter:
-                stmt = insert(table.table).values(**data)
-                # 这个简化的例子对于SQLite足够了，更通用的方案会更复杂
-                # 这里假设每次都是新数据，用append即可，或用replace清空再插入
-                # 为了安全地增量，最好是先删除冲突的，再插入
-                # 但由于akshare获取的数据通常是新的，直接append是最高效的
-                # 如果要实现严格的upsert，需要更复杂的逻辑
-                pass # 在这个例子中，让 to_sql 的 if_exists='append' 处理
-            # to_sql for sqlite with if_exists='append' and primary key doesn't replace.
-            # A more robust solution is needed for true upsert.
-            # A simple approach for this problem: delete existing and then insert.
-            # However, for efficiency, we will rely on fetching data > last_date.
-            # `to_sql` with `if_exists='replace'` would wipe the table.
-            # `if_exists='append'` will fail on primary key conflict.
-            # So, we'll ensure fetched data is always new.
-            # A simple workaround for this specific use case with sqlite
-            data = [dict(zip(keys, row)) for row in data_iter]
-            conn.execute(table.table.insert().prefix_with("OR REPLACE"), data)
-
-        return None # 使用 to_sql 默认的快速方法，依赖于数据源的非重复性
+    def is_db_empty(self) -> bool:
+        """Checks if the main data table is empty."""
+        inspector = inspect(self.engine)
+        if not inspector.has_table(self.table_name):
+            return True
+        try:
+            with self.engine.connect() as connection:
+                count = connection.execute(text(f"SELECT COUNT(1) FROM {self.table_name}")).scalar()
+            return count == 0
+        except Exception as e:
+            logging.error(f"Could not check if DB is empty, assuming it is. Error: {e}")
+            return True
